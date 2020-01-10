@@ -5227,6 +5227,11 @@ switch_status_t config_sofia(sofia_config_t reload, char *profile_name)
 							switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING,
 											  "rtp-timeout-sec deprecated use media_timeout variable.\n"); 
 						}
+					} else if (!strcasecmp(var, "rtp-timeout-warning-event-threshold") && !zstr(val)) {
+						int v = atoi(val);
+						if (v >= 0) {
+							profile->rtp_timeout_warning_event_threshold = v;
+						}
 					} else if (!strcasecmp(var, "rtp-hold-timeout-sec") && !zstr(val)) {
 						int v = atoi(val);
 						if (v >= 0) {
