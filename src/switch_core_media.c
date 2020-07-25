@@ -130,6 +130,7 @@ typedef struct switch_rtp_engine_s {
 	uint32_t last_codec_ms;
 	uint8_t codec_reinvites;
 	uint32_t max_missed_packets;
+	uint32_t missed_packets_event_threshold;
 	uint32_t max_missed_hold_packets;
 	uint32_t media_timeout;
 	uint32_t media_hold_timeout;
@@ -2967,6 +2968,7 @@ SWITCH_DECLARE(switch_status_t) switch_core_media_read_frame(switch_core_session
 		if (type != SWITCH_MEDIA_TYPE_TEXT && engine->reset_codec > 0) {
 			const char *val;
 			int rtp_timeout_sec = 0;
+			int rtp_timeout_warning_event_threshold = 0;
 			int rtp_hold_timeout_sec = 0;
 
 			engine->reset_codec = 0;
@@ -2995,6 +2997,13 @@ SWITCH_DECLARE(switch_status_t) switch_core_media_read_frame(switch_core_session
 						}
 					}
 
+					if ((val = switch_channel_get_variable(session->channel, "rtp_timeout_warning_event_threshold"))) {
+						int v = atoi(val);
+						if (v >= 0) {
+							rtp_timeout_warning_event_threshold = v;
+						}
+					}
+
 					if ((val = switch_channel_get_variable(session->channel, "rtp_hold_timeout_sec"))) {
 						int v = atoi(val);
 						if (v >= 0) {
@@ -3012,6 +3021,12 @@ SWITCH_DECLARE(switch_status_t) switch_core_media_read_frame(switch_core_session
 						if (!rtp_hold_timeout_sec) {
 							rtp_hold_timeout_sec = rtp_timeout_sec * 10;
 						}
+					}
+
+					if (rtp_timeout_warning_event_threshold) {
+						engine->missed_packets_event_threshold = rtp_timeout_warning_event_threshold;
+
+						switch_rtp_set_missed_packets_event_threshold(engine->rtp_session, engine->missed_packets_event_threshold);
 					}
 
 					if (rtp_hold_timeout_sec) {
@@ -5360,13 +5375,16 @@ SWITCH_DECLARE(uint8_t) switch_core_media_negotiate_sdp(switch_core_session_t *s
 
 					if (switch_rtp_ready(a_engine->rtp_session)) {
 						switch_rtp_set_max_missed_packets(a_engine->rtp_session, 0);
+						switch_rtp_set_missed_packets_event_threshold(a_engine->rtp_session, 0);
 						a_engine->max_missed_hold_packets = 0;
+						a_engine->missed_packets_event_threshold = 0;
 						a_engine->max_missed_packets = 0;
 						switch_rtp_set_media_timeout(a_engine->rtp_session, a_engine->media_timeout);
 					} else {
 						switch_channel_set_variable(session->channel, "media_timeout_audio", "0");
 						switch_channel_set_variable(session->channel, "media_hold_timeout_audio", "0");
 						switch_channel_set_variable(session->channel, "rtp_timeout_sec", "0");
+						switch_channel_set_variable(session->channel, "rtp_timeout_warning_event_threshold", "0");
 						switch_channel_set_variable(session->channel, "rtp_hold_timeout_sec", "0");
 					}
 				} else if (sendonly < 2 && !strcasecmp(attr->a_name, "sendrecv")) {
@@ -6544,6 +6562,9 @@ SWITCH_DECLARE(int) switch_core_media_toggle_hold(switch_core_session_t *session
 			if (a_engine->max_missed_hold_packets && a_engine->rtp_session) {
 				switch_rtp_set_max_missed_packets(a_engine->rtp_session, a_engine->max_missed_hold_packets);
 			}
+			if (a_engine->missed_packets_event_threshold && a_engine->rtp_session) {
+				switch_rtp_set_missed_packets_event_threshold(a_engine->rtp_session, a_engine->missed_packets_event_threshold);
+			}
 
 			if (a_engine->media_hold_timeout) {
 				switch_rtp_set_media_timeout(a_engine->rtp_session, a_engine->media_hold_timeout);
@@ -6632,6 +6653,9 @@ SWITCH_DECLARE(int) switch_core_media_toggle_hold(switch_core_session_t *session
 				if (v_engine->media_hold_timeout) {
 					switch_rtp_set_media_timeout(v_engine->rtp_session, v_engine->media_timeout);
 				}
+			}
+			if (a_engine->missed_packets_event_threshold && a_engine->rtp_session) {
+				switch_rtp_set_missed_packets_event_threshold(a_engine->rtp_session, a_engine->missed_packets_event_threshold);
 			}
 
 			if (b_channel) {
@@ -8951,6 +8975,13 @@ SWITCH_DECLARE(switch_status_t) switch_core_media_activate_rtp(switch_core_sessi
 			}
 		}
 
+		if ((val = switch_channel_get_variable(session->channel, "rtp_timeout_warning_event_threshold"))) {
+			int v = atoi(val);
+			if (v >= 0) {
+				smh->mparams->rtp_timeout_warning_event_threshold = v;
+			}
+		}
+
 		if ((val = switch_channel_get_variable(session->channel, "rtp_hold_timeout_sec"))) {
 			int v = atoi(val);
 			if (v >= 0) {
@@ -8967,6 +8998,12 @@ SWITCH_DECLARE(switch_status_t) switch_core_media_activate_rtp(switch_core_sessi
 			if (!smh->mparams->rtp_hold_timeout_sec) {
 				smh->mparams->rtp_hold_timeout_sec = smh->mparams->rtp_timeout_sec * 10;
 			}
+		}
+
+		if (smh->mparams->rtp_timeout_warning_event_threshold) {
+			a_engine->missed_packets_event_threshold = smh->mparams->rtp_timeout_warning_event_threshold;
+
+			switch_rtp_set_missed_packets_event_threshold(a_engine->rtp_session, a_engine->missed_packets_event_threshold);
 		}
 
 		if (smh->mparams->rtp_hold_timeout_sec) {
@@ -12578,6 +12615,7 @@ SWITCH_DECLARE(switch_status_t) switch_core_media_receive_message(switch_core_se
 		{
 			if (a_engine && a_engine->rtp_session) {
 				switch_rtp_set_max_missed_packets(a_engine->rtp_session, a_engine->max_missed_hold_packets);
+				switch_rtp_set_missed_packets_event_threshold(a_engine->rtp_session, 0); // Disable missed packets tracking
 				switch_rtp_set_media_timeout(a_engine->rtp_session, a_engine->media_hold_timeout);
 			}
 
@@ -12591,6 +12629,7 @@ SWITCH_DECLARE(switch_status_t) switch_core_media_receive_message(switch_core_se
 		{
 			if (a_engine && a_engine->rtp_session) {
 				switch_rtp_set_max_missed_packets(a_engine->rtp_session, a_engine->max_missed_packets);
+				switch_rtp_set_missed_packets_event_threshold(a_engine->rtp_session, a_engine->missed_packets_event_threshold); // Renable missed packets tracking
 				switch_rtp_set_media_timeout(a_engine->rtp_session, a_engine->media_timeout);
 			}
 

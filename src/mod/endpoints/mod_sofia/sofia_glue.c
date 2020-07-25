@@ -182,6 +182,7 @@ void sofia_glue_attach_private(switch_core_session_t *session, sofia_profile_t *
 	tech_pvt->mparams.sdp_username = profile->sdp_username;
 	tech_pvt->mparams.cng_pt = tech_pvt->cng_pt;
 	tech_pvt->mparams.rtp_timeout_sec = profile->rtp_timeout_sec;
+	tech_pvt->mparams.rtp_timeout_warning_event_threshold = profile->rtp_timeout_warning_event_threshold;
 	tech_pvt->mparams.rtp_hold_timeout_sec = profile->rtp_hold_timeout_sec;
 
 	if (profile->rtp_digit_delay) {

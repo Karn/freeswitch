@@ -442,6 +442,8 @@ struct switch_rtp {
 	switch_jb_t *vb;
 	switch_jb_t *vbw;
 	uint32_t max_missed_packets;
+	int are_missed_packets_above_threshold;
+	uint32_t missed_packets_event_threshold;
 	uint32_t missed_count;
 	switch_time_t last_media;
 	uint32_t media_timeout;
@@ -2913,11 +2915,27 @@ SWITCH_DECLARE(void) switch_rtp_set_max_missed_packets(switch_rtp_t *rtp_session
 	if (rtp_session->missed_count >= max) {
 
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(rtp_session->session), SWITCH_LOG_WARNING,
-						  "new max missed packets(%d->%d) greater than current missed packets(%d). RTP will timeout.\n",
-						  rtp_session->missed_count, max, rtp_session->missed_count);
+						  "new max missed packets(%d->%d) lower than current missed packets(%d). RTP will timeout.\n",
+						  rtp_session->max_missed_packets, max, rtp_session->missed_count);
 	}
 
 	rtp_session->max_missed_packets = max;
+}
+
+SWITCH_DECLARE(void) switch_rtp_set_missed_packets_event_threshold(switch_rtp_t *rtp_session, uint32_t threshold)
+{
+	if (!switch_rtp_ready(rtp_session) || rtp_session->flags[SWITCH_RTP_FLAG_UDPTL]) {
+		return;
+	}
+
+	if (rtp_session->missed_count >= threshold) {
+
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(rtp_session->session), SWITCH_LOG_WARNING,
+						  "new missed packets event threshold (%d->%d) lower than current missed packets (%d). No event will be fired.\n",
+						  rtp_session->missed_packets_event_threshold, threshold, rtp_session->missed_count);
+	}
+
+	rtp_session->missed_packets_event_threshold = threshold;
 }
 
 SWITCH_DECLARE(void) switch_rtp_reset_jb(switch_rtp_t *rtp_session)
@@ -7443,14 +7461,47 @@ static int rtp_common_read(switch_rtp_t *rtp_session, switch_payload_t *payload_
 				if (rtp_session->max_missed_packets && read_loops == 1 && !rtp_session->flags[SWITCH_RTP_FLAG_VIDEO] &&
 					!rtp_session->flags[SWITCH_RTP_FLAG_UDPTL]) {
 					if (bytes && status == SWITCH_STATUS_SUCCESS) {
+
+						if (rtp_session->are_missed_packets_above_threshold) {
+							switch_event_t *event = NULL;
+							rtp_session->are_missed_packets_above_threshold = 0;
+
+							switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(rtp_session->session), SWITCH_LOG_ERROR, "Starting to receive bytes again\n");
+
+							if (switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, "rtp_packet_missed") == SWITCH_STATUS_SUCCESS) {
+								switch_channel_t *channel = switch_core_session_get_channel(rtp_session->session);
+
+								switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "caller-unique-id", switch_channel_get_uuid(channel));
+								switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "caller-partner-id", switch_channel_get_partner_uuid(channel));
+								switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Type", "Resumed");
+								switch_event_fire(&event);
+							}
+						}
+
 						rtp_session->missed_count = 0;
 					} else {
 						if (rtp_session->media_timeout && rtp_session->last_media) {
 							check_timeout(rtp_session);
 						} else {
 							if (++rtp_session->missed_count >= rtp_session->max_missed_packets) {
+								switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(rtp_session->session), SWITCH_LOG_ERROR, "Exceeded max_missed_packets count\n");
+
 								ret = -2;
 								goto end;
+							} else if (rtp_session->missed_packets_event_threshold && rtp_session->missed_count == rtp_session->missed_packets_event_threshold) {
+								switch_event_t *event = NULL;
+								rtp_session->are_missed_packets_above_threshold = 1;
+
+								switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(rtp_session->session), SWITCH_LOG_ERROR, "Updated missed packets count -- total missed %d\n", rtp_session->missed_count);
+
+								if (switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, "rtp_packet_missed") == SWITCH_STATUS_SUCCESS) {
+									switch_channel_t *channel = switch_core_session_get_channel(rtp_session->session);
+
+									switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "caller-unique-id", switch_channel_get_uuid(channel));
+									switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "caller-partner-id", switch_channel_get_partner_uuid(channel));
+									switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Type", "Missed");
+									switch_event_fire(&event);
+								}
 							}
 						}
 					}
@@ -7506,7 +7557,13 @@ static int rtp_common_read(switch_rtp_t *rtp_session, switch_payload_t *payload_
 				if (rtp_session->media_timeout && rtp_session->last_media) {
 					check_timeout(rtp_session);
 				} else if (rtp_session->max_missed_packets) {
+					if (rtp_session->missed_count % 10 == 0) {
+						switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(rtp_session->session), SWITCH_LOG_WARNING, "Updated missed packets count -- total missed %d\n", rtp_session->missed_count);
+					}
+
 					if (rtp_session->missed_count >= rtp_session->max_missed_packets) {
+						switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(rtp_session->session), SWITCH_LOG_WARNING, "Exceeded max_missed_packets count\n");
+
 						ret = -2;
 						goto end;
 					}

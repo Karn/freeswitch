@@ -92,6 +92,7 @@ typedef enum {
 
 typedef struct switch_core_media_params_s {
 	uint32_t rtp_timeout_sec;
+	uint32_t rtp_timeout_warning_event_threshold;
 	uint32_t rtp_hold_timeout_sec;
 	uint32_t dtmf_delay;
 	uint32_t codec_flags;

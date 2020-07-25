@@ -702,6 +702,7 @@ struct sofia_profile {
 	uint32_t minimum_session_expires;
 	uint32_t max_proceeding;
 	uint32_t rtp_timeout_sec;
+	uint32_t rtp_timeout_warning_event_threshold;
 	uint32_t rtp_hold_timeout_sec;
 	char *odbc_dsn;
 	char *pre_trans_execute;
